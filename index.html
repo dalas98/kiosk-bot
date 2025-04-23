@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/assets/style.css"/>
+</head>
+
+<body>
+
+    <!-- Video Background -->
+    <video class="video-bg" id="bgVideo" muted playsInline autoplay>
+        <source type="video/mp4">
+    </video>
+
+    <div class="overlay"></div>
+
+    <!-- Chat -->
+    <div class="chat-wrapper">
+        <div class="scroll-area" id="chatArea">
+            <div class="chat-content" id="chatContent">
+                <!-- Initial bot message moved to JS to easily speak it -->
+            </div>
+        </div>
+
+        <div class="button-row"></div>
+    </div>
+    <script src="/assets/script.js" defer></script>
+</body>
+
+</html>
