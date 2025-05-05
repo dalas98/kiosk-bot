@@ -119,6 +119,31 @@
             background-color: #f0f0f0;
         }
 
+        .mic-button-container {
+            width: 100%;
+            max-width: 600px; /* Match button row width */
+            display: flex;
+            justify-content: center;
+            margin-top: 15px; /* Space above the mic button */
+        }
+
+        #micButton {
+            width: 55px;
+            height: 55px;
+            border-radius: 50%; /* Make it circular */
+            border: none;
+            background-color: rgba(255, 255, 255, 0.9); /* Similar to user bubble */
+            color: #333;
+            font-size: 26px; /* Adjust icon size */
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+        #micButton.listening {
+            background-color: #ff4d4d; /* Red background when listening */
+            color: white;
+        }
+
+
         @keyframes fadeInLeft {
             0% {
                 opacity: 0;
@@ -164,46 +189,106 @@
         </div>
 
         <div class="button-row"></div>
+
+        <!-- Microphone Button Container -->
+        <div class="mic-button-container">
+            <button id="micButton" aria-label="Start voice input">🎤</button>
+        </div>
     </div>
     <script>
         const params = new URLSearchParams(window.location.search);
         const bot = params.get('bot') ?? "hospital";
         const withSound = params.get('tts') === "true";
+        const voiceGender = params.get('voice') ?? "female";
 
         const chatArea = document.getElementById('chatArea');
         const chatContent = document.getElementById('chatContent');
         const bgVideo = document.getElementById('bgVideo');
+        const micButton = document.getElementById('micButton'); // Get the mic button
         let videoPlayed = false;
+
+        let currentAudio = null; // Variable to hold the currently playing audio object
+        // --- Speech Recognition Setup ---
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition;
 
         document.title = "Tanya Saya";
 
         // Function to speak text
-        function speakText(text) {
-            // Cancel any ongoing speech first to avoid overlap if clicked quickly
-            speechSynthesis.cancel();
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'id-ID'; // Set language to Indonesian
-            // Optional: You can try selecting a specific voice if needed
-            // const voices = speechSynthesis.getVoices();
-            // const indonesianVoice = voices.find(voice => voice.lang === 'id-ID');
-            // if (indonesianVoice) {
-            //   utterance.voice = indonesianVoice;
-            // }
+        async function speakText(text) {
+            console.log("text ", text)
+            const url = "http://localhost:8000/tts"
 
-            if (withSound) {
-                speechSynthesis.speak(utterance);
+            // Stop any currently playing audio before starting new one
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.src = ''; // Release the audio source
+            }
+            try {
+                let voiceType = voiceGender == "female" ? "id-ID-GadisNeural" : "id-ID-ArdiNeural"
+
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        "text": text,
+                        "voice": voiceType
+                    })
+                });
+
+                // Check for HTTP errors (e.g., 404, 500)
+                if (!response.ok) {
+                    console.error("TTS Service HTTP error:", response.status, response.statusText);
+                    const errorText = await response.text().catch(() => "Could not read error details."); // Avoid error in error handling
+                    return; // Stop processing
+                }
+
+                // Parse the JSON response
+                const audioBlob = await response.blob();
+
+                // Create an Audio object to play the blob
+                const audioUrl = URL.createObjectURL(audioBlob);
+                const audio = new Audio(audioUrl); // Create the new audio object
+                currentAudio = audio; // Assign it to the global variable
+
+                audio.oncanplaythrough = () => {
+                    // console.log("Audio ready to play."); // Debugging
+                    if (!videoPlayed) {
+                        bgVideo.play().catch(e => console.log("Autoplay blocked:", e));
+                        bgVideo.playsInline = true;
+                        videoPlayed = true;
+                    }
+                    audio.play().catch(e => console.error("Audio playback error:", e));
+                };
+                audio.onended = () => {
+                    // console.log("Audio finished playing."); // Debugging
+                    currentAudio = null; // Clear the variable when audio finishes naturally
+                    URL.revokeObjectURL(audioUrl); // Clean up the object URL
+                };
+                audio.onerror = (e) => {
+                    console.error("Error loading or playing audio:", e);
+                    currentAudio = null; // Clear the variable on error too
+                    URL.revokeObjectURL(audioUrl); // Clean up even on error
+                };
+                
+            } catch (error) {
+                console.error("Error fetching or processing chat response:", error);
             }
         }
 
         // Function to add a bot message (bubble + speech)
-        function addBotMessage(text) {
+        async function addBotMessage(text) {
             const botBubble = document.createElement('div');
             botBubble.className = 'bubble bot';
             botBubble.innerText = text;
             chatContent.appendChild(botBubble);
             chatArea.scrollTop = chatArea.scrollHeight; // Scroll after adding
-            speakText(text); // Speak the text
-            videoPlayed = false;
+            await speakText(text); // Speak the text
+            // if (!responsiveVoice.isPlaying()){
+                videoPlayed = false;
+            // }
         }
 
         function addRecommendationButton(option) {
@@ -240,58 +325,176 @@
             sendChat(option);
         }
 
+        // --- Speech Recognition Logic ---
+        function setupSpeechRecognition() {
+            if (!SpeechRecognition) {
+                console.error("Speech Recognition not supported in this browser.");
+                micButton.disabled = true; // Disable button if not supported
+                micButton.innerText = '🚫';
+                micButton.title = "Speech recognition not supported";
+                return;
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.continuous = false; // Stop after first pause in speech
+            recognition.lang = 'id-ID';     // Set language to Indonesian
+            recognition.interimResults = false; // We only want final results
+            recognition.maxAlternatives = 1;
+
+            recognition.onstart = () => {
+                console.log("Speech recognition started.");
+                micButton.classList.add('listening');
+                micButton.innerText = '👂'; // Listening icon
+                micButton.setAttribute('aria-label', 'Stop voice input');
+            };
+
+            recognition.onresult = (event) => {
+                const speechResult = event.results[0][0].transcript;
+                console.log("Speech recognized:", speechResult);
+
+                // Add user bubble with the recognized text
+                const userBubble = document.createElement('div');
+                userBubble.className = 'bubble user';
+                userBubble.innerText = speechResult;
+                chatContent.appendChild(userBubble);
+                chatArea.scrollTop = chatArea.scrollHeight;
+
+                // Send the recognized text to the chat function
+                sendChat(speechResult);
+            };
+
+            recognition.onspeechend = () => {
+                recognition.stop(); // Explicitly stop listening
+            };
+
+            recognition.onend = () => {
+                console.log("Speech recognition ended.");
+                micButton.classList.remove('listening');
+                micButton.innerText = '🎤'; // Back to mic icon
+                micButton.setAttribute('aria-label', 'Start voice input');
+            };
+
+            recognition.onerror = (event) => {
+                console.error("Speech recognition error:", event.error);
+                if (event.error === 'no-speech') {
+                    console.log("No speech detected.");
+                } else if (event.error === 'not-allowed') {
+                    alert("Microphone access denied. Please allow microphone access in your browser settings.");
+                }
+                // Ensure button resets even on error
+                micButton.classList.remove('listening');
+                micButton.innerText = '🎤';
+                micButton.setAttribute('aria-label', 'Start voice input');
+            };
+        }
+
+        // Function to handle microphone button click
+        function handleMicClick() {
+            if (!recognition) {
+                console.error("Speech recognition not initialized.");
+                return;
+            }
+
+            // Check if it's currently listening
+            if (micButton.classList.contains('listening')) {
+                recognition.stop(); // Stop listening if already active
+            } else {
+                // --- Stop any playing TTS audio before starting recognition ---
+                if (currentAudio) {
+                    console.log("Stopping current TTS audio.");
+                    currentAudio.pause();
+                    currentAudio.src = ''; // Release the audio source
+                }
+                try {
+                    recognition.start(); // Start listening
+                } catch (e) {
+                    // Handle cases where it might already be running or other errors
+                    console.error("Error starting recognition:", e);
+                    // Reset button state just in case
+                    micButton.classList.remove('listening');
+                    micButton.innerText = '🎤';
+                    micButton.setAttribute('aria-label', 'Start voice input');
+                }
+            }
+        }
+
         // Optional: Ensure voices are loaded (can sometimes help)
         speechSynthesis.onvoiceschanged = () => {
             // console.log("Voices loaded:", speechSynthesis.getVoices());
         };
 
+        // Initialize Speech Recognition on load
+        setupSpeechRecognition();
+
         async function sendChat(query) {
-            const url = "https://1vr08zb0-4848.asse.devtunnels.ms/chat"
-            // const url = "http://localhost:4848/chat"
+            // const url = "https://1vr08zb0-4848.asse.devtunnels.ms/chat"
+            const url = "http://localhost:4848/chat"
             const lang = 'id-ID'
             const projectBot = bot == "hospital" ? "calm-cove-257517" : "security-txkx"
-            fetch(url, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "ProjectBot": projectBot,
-                    "Lang": lang
-                },
-                body: JSON.stringify({
-                    query: query
-                })
-            })
-            .then((response) => response.json())
-            .then((json) => {
-                const data = json.data
+            try {
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "ProjectBot": projectBot, 
+                        "Lang": lang
+                    },
+                    body: JSON.stringify({ query: query })
+                });
+
+                // Check for HTTP errors (e.g., 404, 500)
+                if (!response.ok) {
+                    console.error("HTTP error:", response.status, response.statusText);
+                    const errorText = await response.text().catch(() => "Could not read error details."); // Avoid error in error handling
+                    await addBotMessage(`Maaf, terjadi kesalahan server (${response.status}). ${errorText.substring(0, 100)}`);
+                    clearRecommendationButton(); // Clear buttons on error
+                    return; // Stop processing
+                }
+
+                // Parse the JSON response
+                const json = await response.json();
+                const data = json.data;
+
+                // Process the response data
                 if (data && Array.isArray(data)) { // Check if data is valid
-                    data.forEach(chats => {
-                        const messageType = chats.type
+                    let hasButtons = false; // Track if buttons were added in this response
+                    for (const chats of data) { // Use for...of for potential async inside loop
+                        const messageType = chats.type;
                         if (chats && typeof chats.value === 'string' && messageType === 'text') { // Check chat item validity
                             addBotMessage(chats.value);
                         } else if (chats && messageType === 'button') {
-                            clearRecommendationButton()
-                            const recommendations = chats.value
-                            recommendations.forEach(recommendation => {
-                                addRecommendationButton(recommendation)
-                            })
+                            if (!hasButtons) { // Clear existing buttons only once per response
+                                clearRecommendationButton();
+                                hasButtons = true;
+                            }
+                            const recommendations = chats.value;
+                            if (Array.isArray(recommendations)) {
+                                recommendations.forEach(recommendation => {
+                                    addRecommendationButton(recommendation);
+                                });
+                            } else {
+                                console.warn("Received button type with invalid value:", chats.value);
+                            }
                         } else if (chats && messageType === 'table') {
-                            renderTable(chats.value)
+                            renderTable(chats.value);
                         } else {
                             console.warn("Received invalid chat item:", chats);
                         }
-                    });
+                    }
+                    // If the response had messages but no buttons, clear any old buttons.
+                    if (!hasButtons) {
+                         clearRecommendationButton();
+                    }
                 } else {
                     console.warn("Received invalid data structure:", json);
                     addBotMessage("Maaf, saya menerima respons yang tidak terduga."); // Inform user
+                    clearRecommendationButton(); // Clear buttons on error
                 }
-            })
-            .catch(error => { // Add error handling
+            } catch (error) { // Catch network errors or JSON parsing errors
                 console.error("Error fetching or processing chat response:", error);
                 addBotMessage("Maaf, terjadi kesalahan saat memproses permintaan Anda.");
-                // Optionally clear buttons even on error, if desired
-                // if (buttonRow) buttonRow.innerHTML = '';
-            });
+                clearRecommendationButton(); // Clear buttons on error
+            }
         }
 
         function renderTable(data) {
@@ -360,6 +563,9 @@
                 buttonRow.innerHTML = '';
             }
         }
+
+        // Add event listener for the mic button
+        micButton.addEventListener('click', handleMicClick);
     </script>
     <!-- <script src="/assets/script.js" defer></script> -->
 </body>
